@@ -2,7 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-// --- LƯU TRỰ TRẠNG THÁI TOÀN CỤC ---
+// --- 1. KHAI BÁO BIẾN TOÀN CỤC ---
 static BOOL isFakeGPXActive = NO;
 static NSMutableArray *gpxPoints = nil; 
 static NSInteger currentPointIndex = 0;
@@ -14,58 +14,75 @@ static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
 
-// Biến lưu tọa độ điểm đầu tiên trong file GPX và tọa độ thực tế lúc bắt đầu
 static CLLocationCoordinate2D gpxStartReference;
 static CLLocationCoordinate2D realDeviceReference;
 static BOOL isReferenceSet = NO;
 
-// --- HÀM ĐỌC PHÂN TÍCH FILE GPX TOÀN CỤC THUẦN TÚY ---
-void parseGPXString(NSString *gpxString) {
+// --- 2. BỘ GIẢI MÃ ĐA NĂNG (HỖ TRỢ CẢ GPX LẪN GEOJSON BÌNH THUẬN) ---
+void parseSpatialFile(NSString *fileContent) {
     if (!gpxPoints) gpxPoints = [[NSMutableArray alloc] init];
     [gpxPoints removeAllObjects];
     currentPointIndex = 0;
     isReferenceSet = NO;
     
-    NSError *error = nil;
-    NSRegularExpression *latRegex = [NSRegularExpression regularExpressionWithPattern:@"lat=\"([^\"]+)\"" options:0 error:&error];
-    NSArray *latMatches = [latRegex matchesInString:gpxString options:0 range:NSMakeRange(0, gpxString.length)];
-    
-    NSRegularExpression *lonRegex = [NSRegularExpression regularExpressionWithPattern:@"lon=\"([^\"]+)\"" options:0 error:&error];
-    NSArray *lonMatches = [lonRegex matchesInString:gpxString options:0 range:NSMakeRange(0, gpxString.length)];
-    
-    NSInteger count = MIN(latMatches.count, lonMatches.count);
-    
-    for (NSInteger i = 0; i < count; i++) {
-        NSTextCheckingResult *latMatch = latMatches[i];
-        NSTextCheckingResult *lonMatch = lonMatches[i];
+    // Kiểm tra xem có phải định dạng GeoJSON không
+    if ([fileContent containsString:@"\"type\""] && [fileContent containsString:@"\"coordinates\""]) {
+        NSData *jsonData = [fileContent dataUsingEncoding:NSUTF8StringEncoding];
+        NSError *jsonError = nil;
+        NSDictionary *geoJSONObject = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
         
-        double rawLat = [[gpxString substringWithRange:[latMatch rangeAtIndex:1]] doubleValue];
-        double rawLon = [[gpxString substringWithRange:[lonMatch rangeAtIndex:1]] doubleValue];
+        if (!jsonError && geoJSONObject) {
+            NSDictionary *geometry = geoJSONObject[@"geometry"];
+            if (geometry && [geometry[@"type"] isEqualToString:@"LineString"]) {
+                NSArray *coordinates = geometry[@"coordinates"];
+                for (NSArray *point in coordinates) {
+                    if (point.count >= 2) {
+                        // GeoJSON lưu theo thứ tự [Kinh độ, Vĩ độ]
+                        double lon = [point[0] doubleValue];
+                        double lat = [point[1] doubleValue];
+                        CLLocation *location = [[CLLocation alloc] initWithLatitude:lat longitude:lon];
+                        [gpxPoints addObject:location];
+                    }
+                }
+            }
+        }
+    }
+    
+    // Nếu không phải GeoJSON hoặc bóc tách GeoJSON lỗi, tự động chuyển sang quét hệ GPX
+    if (gpxPoints.count == 0) {
+        NSError *error = nil;
+        NSRegularExpression *latRegex = [NSRegularExpression regularExpressionWithPattern:@"lat=\"([^\"]+)\"" options:0 error:&error];
+        NSArray *latMatches = [latRegex matchesInString:fileContent options:0 range:NSMakeRange(0, fileContent.length)];
         
-        CLLocation *location = [[CLLocation alloc] initWithLatitude:rawLat longitude:rawLon];
-        [gpxPoints addObject:location];
+        NSRegularExpression *lonRegex = [NSRegularExpression regularExpressionWithPattern:@"lon=\"([^\"]+)\"" options:0 error:&error];
+        NSArray *lonMatches = [lonRegex matchesInString:fileContent options:0 range:NSMakeRange(0, fileContent.length)];
+        
+        NSInteger count = MIN(latMatches.count, lonMatches.count);
+        for (NSInteger i = 0; i < count; i++) {
+            double rawLat = [[fileContent substringWithRange:[latMatches[i] rangeAtIndex:1]] doubleValue];
+            double rawLon = [[fileContent substringWithRange:[lonMatches[i] rangeAtIndex:1]] doubleValue];
+            CLLocation *location = [[CLLocation alloc] initWithLatitude:rawLat longitude:rawLon];
+            [gpxPoints addObject:location];
+        }
     }
 }
 
-// --- HÀM CẬP NHẬT MÔ PHỎNG THEO PHƯƠNG PHÁP ĐỘ LỆCH TUYẾN TÍNH ---
+// --- 3. HÀM CẬP NHẬT MÔ PHỎNG ĐỘ LỆCH TUYẾN TÍNH ADAPTIVE ---
 void updateSimulation() {
     if (!isFakeGPXActive || !gpxPoints || gpxPoints.count == 0) return;
     
     CLLocation *targetGPXPoint = gpxPoints[currentPointIndex];
     
-    // Nếu chưa thiết lập điểm mốc, lấy điểm đầu tiên trong file GPX làm gốc so với tọa độ thực hiện tại của máy
     if (!isReferenceSet) {
         gpxStartReference = [gpxPoints.firstObject coordinate];
-        // Giả lập lấy tọa độ Bình Thuận thực tế làm mốc ban đầu (khoảng 11.07, 108.40)
-        realDeviceReference = CLLocationCoordinate2DMake(11.0770226, 108.4083252);
+        // Điểm mốc lấy từ tâm hành trình thực tế Hòa Thắng - Bình Thuận của tệp
+        realDeviceReference = CLLocationCoordinate2DMake(11.077425, 108.409077); 
         isReferenceSet = YES;
     }
     
-    // Tính toán độ sai lệch (Delta) giữa vị trí hiện tại trong GPX so với điểm xuất phát GPX
     double deltaLat = targetGPXPoint.coordinate.latitude - gpxStartReference.latitude;
     double deltaLon = targetGPXPoint.coordinate.longitude - gpxStartReference.longitude;
     
-    // Áp độ lệch đó trực tiếp lên hệ tọa độ của thiết bị, giữ nguyên tỉ lệ map của App FMS
     currentFakeCoordinate.latitude = realDeviceReference.latitude + deltaLat;
     currentFakeCoordinate.longitude = realDeviceReference.longitude + deltaLon;
     
@@ -82,7 +99,7 @@ void updateSimulation() {
     });
 }
 
-// --- GIAO DIỆN VÀ XỬ LÝ SỰ KIỆN CHỌN FILE ---
+// --- 4. GIAO DIỆN VÀ XỬ LÝ SỰ KIỆN CHỌN FILE ---
 @interface OmniControllerView : UIView <UIDocumentPickerDelegate>
 - (void)handlePan:(UIPanGestureRecognizer *)sender;
 - (void)toggleMenu;
@@ -119,10 +136,8 @@ void updateSimulation() {
 }
 
 - (void)openFilePicker {
-    UTType *gpxType = [UTType typeWithFilenameExtension:@"gpx"];
-    if (!gpxType) gpxType = UTTypeData;
-    
-    UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[gpxType] asCopy:YES];
+    // Cho phép mở rộng phạm vi chọn mọi định dạng file văn bản hệ thống (gpx, geojson, json, txt)
+    UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData, UTTypeText] asCopy:YES];
     documentPicker.delegate = self;
     documentPicker.modalPresentationStyle = UIModalPresentationFormSheet;
     
@@ -139,16 +154,16 @@ void updateSimulation() {
     
     NSError *error = nil;
     [selectedFileURL startAccessingSecurityScopedResource];
-    NSString *gpxContent = [NSString stringWithContentsOfURL:selectedFileURL encoding:NSUTF8StringEncoding error:&error];
+    NSString *fileContent = [NSString stringWithContentsOfURL:selectedFileURL encoding:NSUTF8StringEncoding error:&error];
     [selectedFileURL stopAccessingSecurityScopedResource];
     
-    if (!error && gpxContent) {
-        parseGPXString(gpxContent);
+    if (!error && fileContent) {
+        parseSpatialFile(fileContent);
         if (gpxPoints.count > 0) {
             statusLabel.text = [NSString stringWithFormat:@"📁 Tệp: %@ (%lu điểm)", selectedFileURL.lastPathComponent, (unsigned long)gpxPoints.count];
             statusLabel.textColor = [UIColor systemGreenColor];
         } else {
-            statusLabel.text = @"❌ Không tìm thấy tọa độ trkpt hợp lệ!";
+            statusLabel.text = @"❌ Cấu trúc tệp không hợp lệ!";
             statusLabel.textColor = [UIColor systemOrangeColor];
         }
     } else {
@@ -169,7 +184,7 @@ void updateSimulation() {
             sender.backgroundColor = [UIColor systemRedColor];
             updateSimulation();
         } else {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Vui lòng nạp tệp .gpx hợp lệ trước!" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Vui lòng nạp tệp lộ trình trước!" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [[UIApplication sharedApplication].windows.firstObject.rootViewController presentViewController:alert animated:YES completion:nil];
         }
@@ -215,7 +230,7 @@ void initFloatingUI() {
         menuView.hidden = YES;
         
         UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, 270, 20)];
-        titleLabel.text = @"OMNI GPS - ADAPTIVE CONTROLLER";
+        titleLabel.text = @"OMNI GPS - MULTI FORMAT SYSTEM";
         titleLabel.textColor = [UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0];
         titleLabel.font = [UIFont boldSystemFontOfSize:13];
         titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -227,7 +242,7 @@ void initFloatingUI() {
         btnSelectFile.layer.cornerRadius = 8;
         btnSelectFile.layer.borderWidth = 1;
         btnSelectFile.layer.borderColor = [UIColor colorWithWhite:0.5 alpha:0.3].CGColor;
-        [btnSelectFile setTitle:@"📁 CHỌN FILE .GPX TỪ MÁY" forState:UIControlStateNormal];
+        [btnSelectFile setTitle:@"📁 CHỌN TỆP (GPX / GEOJSON)" forState:UIControlStateNormal];
         btnSelectFile.titleLabel.font = [UIFont boldSystemFontOfSize:12];
         [btnSelectFile setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         [btnSelectFile addTarget:uiHandler action:@selector(openFilePicker) forControlEvents:UIControlEventTouchUpInside];
@@ -290,11 +305,10 @@ void initFloatingUI() {
     });
 }
 
-// --- HOOK ĐỊNH VỊ CORE-LOCATION ---
+// --- 5. HOOK ĐỊNH VỊ CORE-LOCATION ---
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate {
     if (isFakeGPXActive && gpxPoints.count > 0) {
-        // Trả về trực tiếp tọa độ mô phỏng thích ứng tuyến tính
         return currentFakeCoordinate;
     }
     return %orig;
