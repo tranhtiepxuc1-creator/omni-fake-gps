@@ -1,0 +1,8 @@
+Package: com.duc.omnifakegps
+Name: OmniFakeGPS
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Tweak fake GPS cho từng ứng dụng chích hợp qua Esign
+Maintainer: Vo Minh Duc
+Author: Vo Minh Duc
