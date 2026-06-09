@@ -15,40 +15,40 @@ jobs:
 
     - name: Install Theos Environment
       run: |
-        # Đặt biến môi trường cài đặt vào thư mục cá nhân có quyền ghi tự do
+        # Cài đặt Theos vào thư mục cá nhân có toàn quyền đọc ghi
         export THEOS=/Users/runner/theos
-        
-        # Tải và ép lệnh cài đặt chạy tại thư mục người dùng cá nhân
         git clone --recursive https://github.com/theos/theos.git $THEOS
-        
-        # Ghi nhớ đường dẫn THEOS vào hệ thống GitHub Actions cho các bước sau
         echo "THEOS=$THEOS" >> $GITHUB_ENV
 
-    - name: Setup iOS SDK
+    - name: Link Official iOS SDK from Xcode
       run: |
-        # Tải cấu trúc thư viện iOS SDK để hỗ trợ biên dịch hàm CoreLocation
+        # Tạo đường dẫn liên kết thẳng tới bộ SDK iOS xịn có sẵn trong Xcode hệ thống
+        XCODE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        echo "Tìm thấy Xcode SDK tại: $XCODE_SDK_PATH"
+        
         mkdir -p /Users/runner/theos/sdks
-        curl -LO https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.tar.xz
-        tar -xf iPhoneOS14.5.sdk.tar.xz -C /Users/runner/theos/sdks/
-        rm iPhoneOS14.5.sdk.tar.xz
+        # Tạo một liên kết mềm (symlink) thay vì phải tải file nặng từ trên mạng
+        ln -s "$XCODE_SDK_PATH" /Users/runner/theos/sdks/iPhoneOS.sdk
+        
+        # Kiểm tra xem liên kết hoạt động tốt không
+        ls -la /Users/runner/theos/sdks/
 
     - name: Compile Tweak to .dylib
       run: |
-        # Khai báo lại biến môi trường và tiến hành biên dịch
         export THEOS=/Users/runner/theos
         
-        # Chạy lệnh biên dịch ép xuất file cấu trúc nhị phân độc lập (.dylib)
-        make package FINALPACKAGE=1
+        # Chỉ định rõ ràng sử dụng bộ SDK hệ thống vừa liên kết để biên dịch
+        make package FINALPACKAGE=1 SDKVERSION=iPhoneOS
       env:
         THEOS: /Users/runner/theos
 
     - name: Prepare Dylib Artifact
       run: |
         mkdir -p output
-        # Tìm và gom file .dylib xuất xưởng ra ngoài
+        # Gom file file .dylib sau khi đúc thành công ra ngoài
         cp .theos/obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp .theos/obj/OmniFakeGPS.dylib output/ 2>/dev/null
         
-        # Nếu Xcode đóng gói thẳng thành file .deb, tiến hành rã bọc lấy file .dylib
+        # Phòng trường hợp Theos đóng gói thẳng ra file .deb, ta giải nén để lấy file .dylib bên trong
         if [ ! -f "output/OmniFakeGPS.dylib" ]; then
           dpkg-deb -x packages/*.deb output/ 2>/dev/null || true
           cp output/Library/MobileSubstrate/DynamicLibraries/OmniFakeGPS.dylib output/ 2>/dev/null || true
