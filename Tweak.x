@@ -5,15 +5,18 @@
 
 // --- 1. KHAI BÁO BIẾN TOÀN CỤC ---
 static BOOL isFakeGPXActive = NO;
-static NSMutableArray *gpxPoints = nil; // Mảng lưu trữ danh sách tọa độ "tĩnh" lấy từ file
-static NSInteger currentPointIndex = 0; // Biến đếm vị trí điểm đang đứng trên tuyến đường
-static double simulationSpeed = 1.0;   // Hệ số tua thời gian (0.1x - 10x)
-static double movementSpeedKmh = 5.0;  // Tốc độ di chuyển mô phỏng (1km/h - 20km/h)
+static NSMutableArray *gpxPoints = nil; 
+static NSInteger currentPointIndex = 0; 
+static double simulationSpeed = 1.0;   
+static double movementSpeedKmh = 5.0;  
 
-static CLLocation *currentFakeLocation = nil; // Đối tượng vị trí "động" để bơm vào app FMS
+static CLLocation *currentFakeLocation = nil; 
 static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
+
+// Khai báo luồng chạy ngầm độc lập để điều khiển thời gian di chuyển
+static dispatch_queue_t simulationQueue = nil;
 
 // --- HÀM TỰ TÍNH TOÁN HƯỚNG XOAY MŨI TÊN (BEARING/COURSE) ---
 double calculateCourse(double lat1, double lon1, double lat2, double lon2) {
@@ -52,7 +55,6 @@ void parseSpatialFile(NSString *fileContent) {
                     if (point.count >= 2) {
                         double lon = [point[0] doubleValue];
                         double lat = [point[1] doubleValue];
-                        // Nếu file không lưu độ cao, mặc định bù độ cao nền Bình Thuận là 50 mét
                         double ele = (point.count >= 3 && [point[2] doubleValue] > 0) ? [point[2] doubleValue] : 50.0;
                         
                         CLLocation *loc = [[CLLocation alloc] initWithCoordinate:CLLocationCoordinate2DMake(lat, lon)
@@ -100,49 +102,48 @@ void parseSpatialFile(NSString *fileContent) {
     }
 }
 
-// --- 3. HÀM ĐIỀU KHIỂN THỜI GIAN ĐỂ TẠO SỰ DI CHUYỂN ĐỘNG ---
+// --- 3. HÀM ĐIỀU KHIỂN CHẠY NGẦM HOÀN HẢO KHÔNG GÂY ĐƠ MÁY ---
 void updateSimulation() {
     if (!isFakeGPXActive || !gpxPoints || gpxPoints.count == 0) return;
     
-    // Bốc điểm tọa độ tĩnh hiện tại trong mảng ra xử lý
-    CLLocation *currentPoint = gpxPoints[currentPointIndex];
-    
-    // Lập trình tự động tính toán hướng xoay đầu mũi tên dựa trên điểm sắp tới
-    double calculatedCourse = 0.0;
-    if (currentPointIndex < gpxPoints.count - 1) {
-        CLLocation *nextPoint = gpxPoints[currentPointIndex + 1];
-        calculatedCourse = calculateCourse(currentPoint.coordinate.latitude, currentPoint.coordinate.longitude,
-                                           nextPoint.coordinate.latitude, nextPoint.coordinate.longitude);
-    } else if (gpxPoints.count > 1) {
-        CLLocation *prevPoint = gpxPoints[currentPointIndex - 1];
-        calculatedCourse = calculateCourse(prevPoint.coordinate.latitude, prevPoint.coordinate.longitude,
-                                           currentPoint.coordinate.latitude, currentPoint.coordinate.longitude);
-    }
-    
-    double speedMs = movementSpeedKmh / 3.6; // Đổi vận tốc km/h sang m/s chuẩn Apple
-    
-    // Đúc gói vị trí động hoàn chỉnh để chuyển cho hàm Hook che mắt app FMS
-    currentFakeLocation = [[CLLocation alloc] initWithCoordinate:currentPoint.coordinate
-                                                        altitude:currentPoint.altitude
-                                              horizontalAccuracy:1.0  
-                                                verticalAccuracy:1.0  
-                                                          course:calculatedCourse 
-                                                           speed:speedMs  
-                                                       timestamp:[NSDate date]];
-    
-    // Tăng chỉ số để vòng lặp sau tự động bước sang điểm tiếp theo
-    currentPointIndex++;
-    if (currentPointIndex >= gpxPoints.count) {
-        currentPointIndex = 0; // Chạy hết tuyến đường thì tự động quay lại điểm xuất phát
-    }
-    
-    // Công thức tính toán nhịp thời gian delay dựa trên tốc độ chọn trên thanh gạt
-    double interval = (3.6 / movementSpeedKmh) / simulationSpeed;
-    if (interval < 0.1) interval = 0.1;
-    
-    // PHÁT LỆNH DI CHUYỂN: Ép hàm điều khiển tự lặp lại sau một khoảng nhịp thời gian
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        updateSimulation();
+    // Đẩy toàn bộ quá trình xử lý tính toán toán học vào luồng nền ngầm độc lập
+    dispatch_async(simulationQueue, ^{
+        CLLocation *currentPoint = gpxPoints[currentPointIndex];
+        
+        double calculatedCourse = 0.0;
+        if (currentPointIndex < gpxPoints.count - 1) {
+            CLLocation *nextPoint = gpxPoints[currentPointIndex + 1];
+            calculatedCourse = calculateCourse(currentPoint.coordinate.latitude, currentPoint.coordinate.longitude,
+                                               nextPoint.coordinate.latitude, nextPoint.coordinate.longitude);
+        } else if (gpxPoints.count > 1) {
+            CLLocation *prevPoint = gpxPoints[currentPointIndex - 1];
+            calculatedCourse = calculateCourse(prevPoint.coordinate.latitude, prevPoint.coordinate.longitude,
+                                               currentPoint.coordinate.latitude, currentPoint.coordinate.longitude);
+        }
+        
+        double speedMs = movementSpeedKmh / 3.6;
+        
+        // Tạo dữ liệu vị trí ảo
+        currentFakeLocation = [[CLLocation alloc] initWithCoordinate:currentPoint.coordinate
+                                                            altitude:currentPoint.altitude
+                                                  horizontalAccuracy:1.0  
+                                                    verticalAccuracy:1.0  
+                                                              course:calculatedCourse 
+                                                               speed:speedMs  
+                                                           timestamp:[NSDate date]];
+        
+        currentPointIndex++;
+        if (currentPointIndex >= gpxPoints.count) {
+            currentPointIndex = 0; 
+        }
+        
+        double interval = (3.6 / movementSpeedKmh) / simulationSpeed;
+        if (interval < 0.1) interval = 0.1;
+        
+        // Luồng ngầm tự ngủ và tự gọi lại chính nó mà không làm ảnh hưởng tới màn hình cảm ứng UI
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)), simulationQueue, ^{
+            updateSimulation();
+        });
     });
 }
 
@@ -228,7 +229,7 @@ void updateSimulation() {
             isFakeGPXActive = YES;
             [sender setTitle:@"ĐANG CHẠY MÔ PHỎNG - BẤM ĐỂ DỪNG" forState:UIControlStateNormal];
             sender.backgroundColor = [UIColor systemRedColor];
-            updateSimulation(); // Bắt đầu ra lệnh kích hoạt luồng điều khiển thời gian di chuyển
+            updateSimulation(); 
         } else {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Vui lòng nạp tệp lộ trình trước!" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -276,7 +277,7 @@ void initFloatingUI() {
         menuView.hidden = YES;
         
         UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, 270, 20)];
-        titleLabel.text = @"OMNI GPS - PROFESSIONAL SYSTEM";
+        titleLabel.text = @"OMNI GPS - MULTI-THREAD SYSTEM";
         titleLabel.textColor = [UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0];
         titleLabel.font = [UIFont boldSystemFontOfSize:13];
         titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -351,7 +352,7 @@ void initFloatingUI() {
     });
 }
 
-// --- 5. HOOK BẺ GÃY HỆ THỐNG ĐỊNH VỊ CORE-LOCATION ---
+// --- 5. HOOK ĐỊNH VỊ CORE-LOCATION ---
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate {
     if (isFakeGPXActive && currentFakeLocation) {
@@ -401,5 +402,9 @@ void initFloatingUI() {
 %end
 
 %ctor {
+    // Khởi tạo luồng chạy nền ngầm với độ ưu tiên cao nhất
+    simulationQueue = dispatch_queue_create("com.omni.simulation.queue", DISPATCH_QUEUE_SERIAL);
+    dispatch_set_target_queue(simulationQueue, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+    
     initFloatingUI();
 }
