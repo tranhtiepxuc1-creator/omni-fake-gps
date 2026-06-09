@@ -15,33 +15,31 @@ jobs:
 
     - name: Install Ldid and Dependencies
       run: |
-        # SỬ TRONG LỖI: Cài đặt công cụ ldid để hỗ trợ khâu đóng gói ký mã của Theos
         brew install ldid
 
     - name: Install Theos Environment
       run: |
-        # Tải bộ khung biên dịch Theos gốc về thư mục cá nhân
         git clone --recursive https://github.com/theos/theos.git /Users/runner/theos
 
     - name: Download Pure iOS SDK from Theos Repository
       run: |
         mkdir -p /Users/runner/theos/sdks
-        # Tải bộ SDK rút gọn để hỗ trợ hàm CoreLocation
         git clone https://github.com/theos/sdks.git /tmp/sdks
         mv /tmp/sdks/iPhoneOS14.5.sdk /Users/runner/theos/sdks/iphoneos.sdk
 
     - name: Compile Tweak to .dylib
       run: |
-        # Ra lệnh thực hiện đúc tweak, sử dụng ldid vừa cài để hoàn tất đóng gói
+        # ĐƯỢC CHỈ ĐỊNH: Dọn sạch sẽ hoàn toàn bộ nhớ đệm (Cache) cũ trước khi đúc bản mới
+        make clean THEOS=/Users/runner/theos
+        
+        # Tiến hành dịch mới tinh 100% từ file Tweak.x hiện tại
         make package FINALPACKAGE=1 SDKVERSION=iphoneos THEOS=/Users/runner/theos
 
     - name: Prepare Dylib Artifact
       run: |
         mkdir -p output
-        # Tìm và trích xuất file .dylib thành phẩm ra ngoài
         cp .theos/obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp .theos/obj/OmniFakeGPS.dylib output/ 2>/dev/null || cp obj/OmniFakeGPS.dylib output/ 2>/dev/null
         
-        # Nếu xuất ra file .deb, tiến hành giải nén lấy file .dylib bên trong phòng hờ
         if [ ! -f "output/OmniFakeGPS.dylib" ]; then
           dpkg-deb -x packages/*.deb output/ 2>/dev/null || true
           cp output/Library/MobileSubstrate/DynamicLibraries/OmniFakeGPS.dylib output/ 2>/dev/null || true
