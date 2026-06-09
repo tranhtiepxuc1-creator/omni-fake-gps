@@ -15,28 +15,26 @@ jobs:
 
     - name: Install Theos Environment
       run: |
-        # Tải bộ khung biên dịch Theos về thư mục người dùng cá nhân
+        # Tải bộ khung biên dịch Theos gốc về thư mục cá nhân
         git clone --recursive https://github.com/theos/theos.git /Users/runner/theos
 
-    - name: Clean and Copy Official iOS SDK (Hard Copy)
+    - name: Download Pure iOS SDK from Theos Repository
       run: |
-        # Dò vị trí chính xác của bộ SDK iOS trong Xcode hệ thống
-        XCODE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-        echo "Xcode SDK thực tế nằm tại: $XCODE_SDK_PATH"
-        
-        # Tạo thư mục và dọn sạch dữ liệu lỗi trước đó
+        # Tạo thư mục chứa SDK trong cấu trúc của Theos
         mkdir -p /Users/runner/theos/sdks
-        rm -rf /Users/runner/theos/sdks/*
         
-        # DÙNG LỆNH CP ĐỂ COPY CỨNG: Ép sao chép toàn bộ ruột SDK vào thư mục viết thường iphoneos.sdk
-        cp -R "$XCODE_SDK_PATH/" /Users/runner/theos/sdks/iphoneos.sdk
+        # Tải thẳng bộ SDK iOS 14.5 bản rút gọn siêu nhẹ từ kho lưu trữ uy tín của cộng đồng
+        git clone https://github.com/theos/sdks.git /tmp/sdks
         
-        # Kiểm tra xác nhận xem các file core đã nằm trong Theos chưa
+        # Di chuyển bộ SDK chuẩn vị trí viết thường vào đúng nơi Theos cần tìm
+        mv /tmp/sdks/iPhoneOS14.5.sdk /Users/runner/theos/sdks/iphoneos.sdk
+        
+        # Xác nhận kiểm tra xem thư mục đã sẵn sàng để biên dịch chưa
         ls -la /Users/runner/theos/sdks/iphoneos.sdk
 
     - name: Compile Tweak to .dylib
       run: |
-        # Thực hiện lệnh biên dịch với đường dẫn SDK cứng sạch sẽ 100%
+        # Thực hiện lệnh đúc tweak với bộ SDK sạch sẽ, không vướng bảo mật Xcode
         make package FINALPACKAGE=1 SDKVERSION=iphoneos THEOS=/Users/runner/theos
 
     - name: Prepare Dylib Artifact
