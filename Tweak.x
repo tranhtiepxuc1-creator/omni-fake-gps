@@ -90,7 +90,7 @@ void parseSpatialFile(NSString *fileContent) {
         }
     }
 
-    // ✨ THIẾT KẾ MỚI: Nhập file xong, lập tức ghim định vị tĩnh đứng im ở điểm đầu tiên
+    // Nhập file xong, ghim định vị đứng im ở điểm đầu tiên
     if (gpxPoints.count > 0) {
         CLLocation *firstPoint = gpxPoints[0];
         currentFakeLocation = [[CLLocation alloc] initWithCoordinate:firstPoint.coordinate altitude:firstPoint.altitude horizontalAccuracy:1.0 verticalAccuracy:1.0 course:0.0 speed:0.0 timestamp:[NSDate date]];
@@ -103,7 +103,7 @@ void updateSimulation() {
     
     dispatch_async(simulationQueue, ^{
         if (currentPointIndex >= gpxPoints.count) {
-            currentPointIndex = 0; // Vòng lặp quay đầu
+            currentPointIndex = 0; 
         }
         
         CLLocation *currentPoint = gpxPoints[currentPointIndex];
@@ -115,17 +115,16 @@ void updateSimulation() {
         
         double speedMs = movementSpeedKmh / 3.6;
         
-        // Đúc tệp định vị động cập nhật liên tục theo biến đếm
         currentFakeLocation = [[CLLocation alloc] initWithCoordinate:currentPoint.coordinate altitude:currentPoint.altitude horizontalAccuracy:1.0 verticalAccuracy:1.0 course:calculatedCourse speed:speedMs timestamp:[NSDate date]];
         
         currentPointIndex++;
         
-        // Điều chỉnh nhịp thở thời gian giãn cách bước nhảy an toàn chống treo app
         double interval = (3.6 / movementSpeedKmh) / simulationSpeed;
         if (interval < 1.0) interval = 1.0; 
         
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)), simulationQueue, ^{
-            if (currentState == OmniSimulationStateOmniPlaying) {
+            // CHUẨN XÁC: Kiểm tra đúng trạng thái OmniStatePlaying đã đồng bộ khai báo đầu file
+            if (currentState == OmniStatePlaying) {
                 updateSimulation();
             }
         });
@@ -147,7 +146,8 @@ void updateSimulation() {
 
 - (void)handlePan:(UIPanGestureRecognizer *)sender {
     CGPoint translation = [sender translationInView:floatingButton.superview];
-    if ([sender state] == UIGestureRecognizerStateBegan || [sender state] == UIGecureRecognizerStateChanged) {
+    // CHUẨN XÁC: Đã sửa lỗi gõ nhầm chính tả hệ thống UIGestureRecognizerStateChanged
+    if ([sender state] == UIGestureRecognizerStateBegan || [sender state] == UIGestureRecognizerStateChanged) {
         [floatingButton setCenter:CGPointMake([floatingButton center].x + translation.x, [floatingButton center].y + translation.y)];
         [sender setTranslation:CGPointZero inView:floatingButton.superview];
     }
@@ -164,7 +164,6 @@ void updateSimulation() {
 }
 
 - (void)moveChanged:(UISlider *)sender {
-    // Ép dải gạt tốc độ di chuyển chạy từ 5.0 km/h đến 20.0 km/h theo đúng yêu cầu
     movementSpeedKmh = sender.value;
     UILabel *lbl = (UILabel *)[menuView viewWithTag:701];
     lbl.text = [NSString stringWithFormat:@"Tốc độ di chuyển: %.1f km/h", movementSpeedKmh];
@@ -194,7 +193,6 @@ void updateSimulation() {
             statusLabel.text = [NSString stringWithFormat:@"📁 Đã ghim điểm đầu (%lu điểm)", (unsigned long)gpxPoints.count];
             statusLabel.textColor = [UIColor systemGreenColor];
             
-            // Khởi tạo lại trạng thái các nút bấm khi nạp file mới
             [btnPlayPause setTitle:@"▶️ BẮT ĐẦU DI CHUYỂN" forState:UIControlStateNormal];
             btnPlayPause.backgroundColor = [UIColor systemGreenColor];
             btnPlayPause.enabled = YES;
@@ -206,32 +204,27 @@ void updateSimulation() {
     }
 }
 
-// 🕹️ XỬ LÝ NÚT PLAY / PAUSE (CHẠY TIẾP HOẶC TẠM DỪNG TẠI CHỖ)
 - (void)playPausePressed:(UIButton *)sender {
     if (gpxPoints.count == 0) return;
     
     if (currentState == OmniStateIdle || currentState == OmniStatePaused) {
-        // Chuyển sang trạng thái CHẠY (Hoặc CHẠY TIẾP từ vị trí đang tạm dừng)
         currentState = OmniStatePlaying;
         [sender setTitle:@"⏸️ TẠM DỪNG LỘ TRÌNH" forState:UIControlStateNormal];
         sender.backgroundColor = [UIColor systemOrangeColor];
         updateSimulation();
     } else if (currentState == OmniStatePlaying) {
-        // Chuyển sang trạng thái TẠM DỪNG (Đứng im nguyên tại tọa độ điểm hiện tại)
         currentState = OmniStatePaused;
         [sender setTitle:@"▶️ TIẾP TỤC DI CHUYỂN" forState:UIControlStateNormal];
         sender.backgroundColor = [UIColor systemGreenColor];
     }
 }
 
-// 🕹️ XỬ LÝ NÚT DỪNG HẲN (QUAY VỀ ĐIỂM ĐẦU VÀ ĐỨNG IM)
 - (void)stopPressed:(UIButton *)sender {
     if (gpxPoints.count == 0) return;
     
     currentState = OmniStateIdle;
     currentPointIndex = 0;
     
-    // Đưa chấm vị trí bốc về điểm xuất phát đầu tiên và đứng im
     CLLocation *firstPoint = gpxPoints[0];
     currentFakeLocation = [[CLLocation alloc] initWithCoordinate:firstPoint.coordinate altitude:firstPoint.altitude horizontalAccuracy:1.0 verticalAccuracy:1.0 course:0.0 speed:0.0 timestamp:[NSDate date]];
     
@@ -300,7 +293,6 @@ void initFloatingUI() {
         statusLabel.textAlignment = NSTextAlignmentCenter;
         [menuView addSubview:statusLabel];
         
-        // THANH TRƯỢT TỐC ĐỘ DI CHUYỂN CHUẨN: 5.0 km/h -> 20.0 km/h
         UILabel *lblMove = [[UILabel alloc] initWithFrame:CGRectMake(15, 110, 260, 15)];
         lblMove.text = @"Tốc độ di chuyển: 5.0 km/h";
         lblMove.textColor = [UIColor whiteColor];
@@ -329,7 +321,6 @@ void initFloatingUI() {
         [sliderSpeed addTarget:uiHandler action:@selector(speedChanged:) forControlEvents:UIControlEventValueChanged];
         [menuView addSubview:sliderSpeed];
         
-        // NÚT ĐIỀU KHIỂN PLAY / PAUSE
         btnPlayPause = [UIButton buttonWithType:UIButtonTypeCustom];
         btnPlayPause.frame = CGRectMake(15, 202, 260, 40);
         btnPlayPause.backgroundColor = [UIColor grayColor];
@@ -340,7 +331,6 @@ void initFloatingUI() {
         [btnPlayPause addTarget:uiHandler action:@selector(playPausePressed:) forControlEvents:UIControlEventTouchUpInside];
         [menuView addSubview:btnPlayPause];
 
-        // NÚT DỪNG HẲN TUYẾN ĐƯỜNG (STOP)
         btnStop = [UIButton buttonWithType:UIButtonTypeCustom];
         btnStop.frame = CGRectMake(15, 252, 260, 38);
         btnStop.backgroundColor = [UIColor colorWithRed:0.35 green:0.15 blue:0.15 alpha:1.0];
@@ -366,7 +356,7 @@ void initFloatingUI() {
     });
 }
 
-// --- 5. HOOK ĐỊNH VỊ CHUYÊN NGHIỆP CHỐNG TREO APP ---
+// --- 5. HOOK ĐỊNH VỊ CHUYÊN NGHIỆP ---
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate {
     if (currentFakeLocation) return currentFakeLocation.coordinate;
