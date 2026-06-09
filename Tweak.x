@@ -88,23 +88,15 @@ void updateSimulation() {
     lbl.text = [NSString stringWithFormat:@"Tốc độ di chuyển: %.1f km/h", movementSpeedKmh];
 }
 
-// 📂 HÀM KÍCH HOẠT MỞ ỨNG DỤNG TỆP CỦA IPHONE
+// 📂 SỬA LỖI: Hợp pháp hóa phương thức khởi tạo DocumentPicker chuẩn iOS mới hiện đại
 - (void)openFilePicker {
-    UIDocumentPickerViewController *documentPicker;
+    UTType *gpxType = [UTType typeWithFilenameExtension:@"gpx"];
+    if (!gpxType) gpxType = UTTypeData;
     
-    // Hỗ trợ xử lý định dạng tệp trên cả iOS cũ lẫn iOS 14-18+ mới hiện nay
-    if (@available(iOS 14.0, *)) {
-        UTType *gpxType = [UTType typeWithFilenameExtension:@"gpx"];
-        if (!gpxType) gpxType = UTTypeData;
-        documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[gpxType] asCopy:YES];
-    } else {
-        documentPicker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.data"] mode:UIDocumentPickerModeImport];
-    }
-    
+    UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[gpxType] asCopy:YES];
     documentPicker.delegate = self;
     documentPicker.modalPresentationStyle = UIModalPresentationFormSheet;
     
-    // Đẩy giao diện chọn file đè lên màn hình cao nhất của ứng dụng
     UIViewController *rootVC = [UIApplication sharedApplication].windows.firstObject.rootViewController;
     while (rootVC.presentedViewController) {
         rootVC = rootVC.presentedViewController;
@@ -117,9 +109,7 @@ void updateSimulation() {
     NSURL *selectedFileURL = urls.firstObject;
     if (!selectedFileURL) return;
     
-    // Bắt đầu đọc nội dung tệp tin GPX
     NSError *error = nil;
-    // Yêu cầu quyền đọc tạm thời từ bộ nhớ bảo mật
     [selectedFileURL startAccessingSecurityScopedResource];
     NSString *gpxContent = [NSString stringWithContentsOfURL:selectedFileURL encoding:NSUTF8StringEncoding error:&error];
     [selectedFileURL stopAccessingSecurityScopedResource];
