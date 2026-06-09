@@ -1,8 +1,9 @@
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <math.h>
 
-// --- 1. KHAI BÁO BIẾN TOÀN CỤC ---
+// --- KHAI BÁO BIẾN TOÀN CỤC ---
 static BOOL isFakeGPXActive = NO;
 static NSMutableArray *gpxPoints = nil; 
 static NSInteger currentPointIndex = 0;
@@ -14,7 +15,52 @@ static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
 
-// --- 2. HÀM ĐỌC PHÂN TÍCH FILE GPX THÔNG MINH (ĐÃ SỬA LỖI BIẾN) ---
+// --- 🌐 THUẬT TOÁN ĐỔI WGS-84 SANG VN-2000 BÌNH THUẬN (MÚI 3°, KTT 108.5°) ---
+CLLocationCoordinate2D convertWGS84ToVN2000BinhThuan(double lat, double lon) {
+    double lon0 = 108.5 * M_PI / 180.0; // Kinh tuyến trục Bình Thuận: 108 độ 30 phút
+    double latRad = lat * M_PI / 180.0;
+    double lonRad = lon * M_PI / 180.0;
+    
+    // Hằng số Elipsoid VN-2000 / WGS-84
+    double a = 6378137.0; 
+    double f = 1.0 / 298.257223563;
+    double b = a * (1.0 - f);
+    double e2 = (a*a - b*b) / (a*a);
+    double ee2 = (a*a - b*b) / (b*b);
+    double k0 = 0.9999; // Hệ số biến dạng múi chiếu 3 độ
+    
+    double dLon = lonRad - lon0;
+    
+    // Tính toán các tham số hình học Gauss-Kruger
+    double N = a / sqrt(1.0 - e2 * sin(latRad) * sin(latRad));
+    double T = tan(latRad) * tan(latRad);
+    double C = ee2 * cos(latRad) * cos(latRad);
+    double A = dLon * cos(latRad);
+    
+    // Tính độ dài cung kinh tuyến M
+    double M = a * ((1.0 - e2/4.0 - 3.0*e2*e2/64.0 - 5.0*e2*e2*e2/256.0) * latRad
+                    - (3.0*e2/8.0 + 3.0*e2*e2/32.0 + 45.0*e2*e2*e2/1024.0) * sin(2.0*latRad)
+                    + (15.0*e2*e2/256.0 + 45.0*e2*e2*e2/1024.0) * sin(4.0*latRad)
+                    - (35.0*e2*e2*e2/3072.0) * sin(6.0*latRad));
+    
+    // Tính tọa độ phẳng X (m) và Y (m)
+    double x_vn2000 = k0 * (M + N * tan(latRad) * (A*A/2.0 + (5.0 - T + 9.0*C + 4.0*C*C) * A*A*A*A/24.0
+                    + (61.0 - 58.0*T + T*T + 600.0*C - 330.0*ee2) * A*A*A*A*A*A/720.0));
+    
+    double y_vn2000 = k0 * N * (A + (1.0 - T + C) * A*A*A/6.0
+                    + (5.0 - 18.0*T + T*T + 72.0*C - 58.0*ee2) * A*A*A*A*A/120.0);
+    
+    // Cộng hằng số dời trục dịch đông (False Easting) quy định hệ tọa độ VN-2000 múi 3°
+    y_vn2000 += 500000.0; 
+    
+    // Trả về cấu trúc chứa giá trị mét X và Y (được lồng ghép giả lập vào cấu trúc coordinate)
+    CLLocationCoordinate2D vn2000Point;
+    vn2000Point.latitude = x_vn2000;  // Trục X (mét)
+    vn2000Point.longitude = y_vn2000; // Trục Y (mét)
+    return vn2000Point;
+}
+
+// --- 3. HÀM ĐỌC PHÂN TÍCH FILE GPX TOÀN CỤC ---
 void parseGPXString(NSString *gpxString) {
     if (!gpxPoints) gpxPoints = [[NSMutableArray alloc] init];
     [gpxPoints removeAllObjects];
@@ -22,30 +68,29 @@ void parseGPXString(NSString *gpxString) {
     
     NSError *error = nil;
     NSRegularExpression *latRegex = [NSRegularExpression regularExpressionWithPattern:@"lat=\"([^\"]+)\"" options:0 error:&error];
+    NSArray *latMatches = [latRegex matchesInString:gpxString options:0 range:NSMakeRange(0, gpxString.length)];
+    
     NSRegularExpression *lonRegex = [NSRegularExpression regularExpressionWithPattern:@"lon=\"([^\"]+)\"" options:0 error:&error];
-    NSRegularExpression *lineRegex = [NSRegularExpression regularExpressionWithPattern:@"<trkpt[^>]*>" options:0 error:&error];
+    NSArray *lonMatches = [lonRegex matchesInString:gpxString options:0 range:NSMakeRange(0, gpxString.length)];
     
-    NSArray *matches = [lineRegex matchesInString:gpxString options:0 range:NSMakeRange(0, gpxString.length)];
+    NSInteger count = MIN(latMatches.count, lonMatches.count);
     
-    for (NSTextCheckingResult *match in matches) {
-        NSString *line = [gpxString substringWithRange:match.range];
+    for (NSInteger i = 0; i < count; i++) {
+        NSTextCheckingResult *latMatch = latMatches[i];
+        NSTextCheckingResult *lonMatch = lonMatches[i];
         
-        // Quét độc lập dữ liệu từng trục
-        NSTextCheckingResult *latMatch = [latRegex firstMatchInString:line options:0 range:NSMakeRange(0, line.length)];
-        NSTextCheckingResult *lonMatch = [lonRegex firstMatchInString:line options:0 range:NSMakeRange(0, line.length)];
+        double rawLat = [[gpxString substringWithRange:[latMatch rangeAtIndex:1]] doubleValue];
+        double rawLon = [[gpxString substringWithRange:[lonMatch rangeAtIndex:1]] doubleValue];
         
-        if (latMatch && lonMatch) {
-            NSString *latStr = [line substringWithRange:[latMatch rangeAtIndex:1]];
-            // CHUẨN XÁC: Phải trích xuất từ mảng lonMatch mới lấy được dữ liệu kinh độ 108.x
-            NSString *lonStr = [line substringWithRange:[lonMatch rangeAtIndex:1]];
-            
-            CLLocation *location = [[CLLocation alloc] initWithLatitude:[latStr doubleValue] longitude:[lonStr doubleValue]];
-            [gpxPoints addObject:location];
-        }
+        // TIẾN HÀNH ĐỔI HỆ TOẠ ĐỘ: Ép tệp GPX WGS-84 sang hệ mét phẳng VN-2000 của Bình Thuận
+        CLLocationCoordinate2D converted = convertWGS84ToVN2000BinhThuan(rawLat, rawLon);
+        
+        CLLocation *location = [[CLLocation alloc] initWithLatitude:converted.latitude longitude:converted.longitude];
+        [gpxPoints addObject:location];
     }
 }
 
-// --- 3. HÀM CẬP NHẬT MÔ PHỎNG DI CHUYỂN ---
+// --- 4. HÀM CẬP NHẬT MÔ PHỎNG DI CHUYỂN ---
 void updateSimulation() {
     if (!isFakeGPXActive || !gpxPoints || gpxPoints.count == 0) return;
     
@@ -65,7 +110,7 @@ void updateSimulation() {
     });
 }
 
-// --- 4. GIAO DIỆN VÀ XỬ LÝ SỰ KIỆN CHỌN FILE ---
+// --- 5. GIAO DIỆN VÀ XỬ LÝ SỰ KIỆN CHỌN FILE ---
 @interface OmniControllerView : UIView <UIDocumentPickerDelegate>
 - (void)handlePan:(UIPanGestureRecognizer *)sender;
 - (void)toggleMenu;
@@ -162,7 +207,6 @@ void updateSimulation() {
 
 static OmniControllerView *uiHandler = nil;
 
-// --- 5. KHỞI TẠO GIAO DIỆN NÚT NỔI ---
 void initFloatingUI() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = nil;
@@ -199,7 +243,7 @@ void initFloatingUI() {
         menuView.hidden = YES;
         
         UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, 270, 20)];
-        titleLabel.text = @"OMNI GPS - FILE SELECTOR";
+        titleLabel.text = @"OMNI GPS - FMS BINH THUAN";
         titleLabel.textColor = [UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0];
         titleLabel.font = [UIFont boldSystemFontOfSize:13];
         titleLabel.textAlignment = NSTextAlignmentCenter;
