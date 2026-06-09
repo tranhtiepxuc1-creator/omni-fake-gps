@@ -5,24 +5,24 @@
 
 // --- 1. KHAI BÁO BIẾN TOÀN CỤC VÀ TRẠNG THÁI ---
 typedef NS_ENUM(NSInteger, OmniSimulationState) {
-    OmniStateIdle,       // Chưa chạy / Dừng hẳn
-    OmniStatePlaying,    // Đang chạy mô phỏng di chuyển
-    OmniStatePaused      // Đang tạm dừng (Giữ nguyên vị trí hiện tại)
+    OmniStateIdle,       
+    OmniStatePlaying,    
+    OmniStatePaused      
 };
 
 static OmniSimulationState currentState = OmniStateIdle;
 static NSMutableArray *gpxPoints = nil; 
 static NSInteger currentPointIndex = 0; 
 static double simulationSpeed = 1.0;   
-static double movementSpeedKmh = 5.0;  // Mặc định ban đầu 5km/h
+static double movementSpeedKmh = 5.0;  
 
 static CLLocation *currentFakeLocation = nil; 
 static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
 
-static UIButton *btnPlayPause = nil; // Nút tích hợp điều khiển Play/Pause
-static UIButton *btnStop = nil;      // Nút dừng hẳn tuyến đường
+static UIButton *btnPlayPause = nil; 
+static UIButton *btnStop = nil;      
 
 static dispatch_queue_t simulationQueue = nil;
 
@@ -90,7 +90,6 @@ void parseSpatialFile(NSString *fileContent) {
         }
     }
 
-    // Nhập file xong, ghim định vị đứng im ở điểm đầu tiên
     if (gpxPoints.count > 0) {
         CLLocation *firstPoint = gpxPoints[0];
         currentFakeLocation = [[CLLocation alloc] initWithCoordinate:firstPoint.coordinate altitude:firstPoint.altitude horizontalAccuracy:1.0 verticalAccuracy:1.0 course:0.0 speed:0.0 timestamp:[NSDate date]];
@@ -123,7 +122,6 @@ void updateSimulation() {
         if (interval < 1.0) interval = 1.0; 
         
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)), simulationQueue, ^{
-            // CHUẨN XÁC: Kiểm tra đúng trạng thái OmniStatePlaying đã đồng bộ khai báo đầu file
             if (currentState == OmniStatePlaying) {
                 updateSimulation();
             }
@@ -146,7 +144,6 @@ void updateSimulation() {
 
 - (void)handlePan:(UIPanGestureRecognizer *)sender {
     CGPoint translation = [sender translationInView:floatingButton.superview];
-    // CHUẨN XÁC: Đã sửa lỗi gõ nhầm chính tả hệ thống UIGestureRecognizerStateChanged
     if ([sender state] == UIGestureRecognizerStateBegan || [sender state] == UIGestureRecognizerStateChanged) {
         [floatingButton setCenter:CGPointMake([floatingButton center].x + translation.x, [floatingButton center].y + translation.y)];
         [sender setTranslation:CGPointZero inView:floatingButton.superview];
@@ -189,18 +186,22 @@ void updateSimulation() {
     
     if (fileContent) {
         parseSpatialFile(fileContent);
-        if (gpxPoints.count > 0) {
-            statusLabel.text = [NSString stringWithFormat:@"📁 Đã ghim điểm đầu (%lu điểm)", (unsigned long)gpxPoints.count];
-            statusLabel.textColor = [UIColor systemGreenColor];
-            
-            [btnPlayPause setTitle:@"▶️ BẮT ĐẦU DI CHUYỂN" forState:UIControlStateNormal];
-            btnPlayPause.backgroundColor = [UIColor systemGreenColor];
-            btnPlayPause.enabled = YES;
-            btnStop.enabled = YES;
-        } else {
-            statusLabel.text = @"❌ Cấu trúc tệp không đúng!";
-            statusLabel.textColor = [UIColor systemOrangeColor];
-        }
+        
+        // AN TOÀN ĐỒ HỌA: Ép các lệnh vẽ và sửa nút bấm phải chạy trên Main Thread để chống đơ máy
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (gpxPoints.count > 0) {
+                statusLabel.text = [NSString stringWithFormat:@"📁 Đã ghim điểm đầu (%lu điểm)", (unsigned long)gpxPoints.count];
+                statusLabel.textColor = [UIColor systemGreenColor];
+                
+                [btnPlayPause setTitle:@"▶️ BẮT ĐẦU DI CHUYỂN" forState:UIControlStateNormal];
+                btnPlayPause.backgroundColor = [UIColor systemGreenColor];
+                btnPlayPause.enabled = YES;
+                btnStop.enabled = YES;
+            } else {
+                statusLabel.text = @"❌ Cấu trúc tệp không đúng!";
+                statusLabel.textColor = [UIColor systemOrangeColor];
+            }
+        });
     }
 }
 
@@ -209,13 +210,17 @@ void updateSimulation() {
     
     if (currentState == OmniStateIdle || currentState == OmniStatePaused) {
         currentState = OmniStatePlaying;
-        [sender setTitle:@"⏸️ TẠM DỪNG LỘ TRÌNH" forState:UIControlStateNormal];
-        sender.backgroundColor = [UIColor systemOrangeColor];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [sender setTitle:@"⏸️ TẠM DỪNG LỘ TRÌNH" forState:UIControlStateNormal];
+            sender.backgroundColor = [UIColor systemOrangeColor];
+        });
         updateSimulation();
     } else if (currentState == OmniStatePlaying) {
         currentState = OmniStatePaused;
-        [sender setTitle:@"▶️ TIẾP TỤC DI CHUYỂN" forState:UIControlStateNormal];
-        sender.backgroundColor = [UIColor systemGreenColor];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [sender setTitle:@"▶️ TIẾP TỤC DI CHUYỂN" forState:UIControlStateNormal];
+            sender.backgroundColor = [UIColor systemGreenColor];
+        });
     }
 }
 
@@ -228,10 +233,12 @@ void updateSimulation() {
     CLLocation *firstPoint = gpxPoints[0];
     currentFakeLocation = [[CLLocation alloc] initWithCoordinate:firstPoint.coordinate altitude:firstPoint.altitude horizontalAccuracy:1.0 verticalAccuracy:1.0 course:0.0 speed:0.0 timestamp:[NSDate date]];
     
-    [btnPlayPause setTitle:@"▶️ BẮT ĐẦU DI CHUYỂN" forState:UIControlStateNormal];
-    btnPlayPause.backgroundColor = [UIColor systemGreenColor];
-    statusLabel.text = [NSString stringWithFormat:@"📁 Đã reset về điểm đầu (%lu điểm)", (unsigned long)gpxPoints.count];
-    statusLabel.textColor = [UIColor systemGreenColor];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [btnPlayPause setTitle:@"▶️ BẮT ĐẦU DI CHUYỂN" forState:UIControlStateNormal];
+        btnPlayPause.backgroundColor = [UIColor systemGreenColor];
+        statusLabel.text = [NSString stringWithFormat:@"📁 Đã reset về điểm đầu (%lu điểm)", (unsigned long)gpxPoints.count];
+        statusLabel.textColor = [UIColor systemGreenColor];
+    });
 }
 @end
 
