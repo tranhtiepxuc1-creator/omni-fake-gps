@@ -15,13 +15,18 @@ jobs:
 
     - name: Install Theos Environment
       run: |
-        # Tải và cấu hình bộ khung biên dịch Tweak chuyên nghiệp (Theos) về máy ảo GitHub
-        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-        echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
+        # Đặt biến môi trường cài đặt vào thư mục cá nhân có quyền ghi tự do
+        export THEOS=/Users/runner/theos
+        
+        # Tải và ép lệnh cài đặt chạy tại thư mục người dùng cá nhân
+        git clone --recursive https://github.com/theos/theos.git $THEOS
+        
+        # Ghi nhớ đường dẫn THEOS vào hệ thống GitHub Actions cho các bước sau
+        echo "THEOS=$THEOS" >> $GITHUB_ENV
 
     - name: Setup iOS SDK
       run: |
-        # Tải SDK iOS của Apple để máy ảo có thư viện CoreLocation biên dịch
+        # Tải cấu trúc thư viện iOS SDK để hỗ trợ biên dịch hàm CoreLocation
         mkdir -p /Users/runner/theos/sdks
         curl -LO https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.tar.xz
         tar -xf iPhoneOS14.5.sdk.tar.xz -C /Users/runner/theos/sdks/
@@ -29,20 +34,24 @@ jobs:
 
     - name: Compile Tweak to .dylib
       run: |
-        # Tiến hành gộp và biên dịch mã nguồn thành file thư viện động chuẩn chip arm64
+        # Khai báo lại biến môi trường và tiến hành biên dịch
         export THEOS=/Users/runner/theos
+        
+        # Chạy lệnh biên dịch ép xuất file cấu trúc nhị phân độc lập (.dylib)
         make package FINALPACKAGE=1
+      env:
+        THEOS: /Users/runner/theos
 
     - name: Prepare Dylib Artifact
       run: |
-        # Tìm và đưa file .dylib xịn ra thư mục gốc để chuẩn bị upload
         mkdir -p output
+        # Tìm và gom file .dylib xuất xưởng ra ngoài
         cp .theos/obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp .theos/obj/OmniFakeGPS.dylib output/ 2>/dev/null
         
-        # Nếu biên dịch ra gói .deb, ta cũng giải nén lấy dylib phòng hờ
+        # Nếu Xcode đóng gói thẳng thành file .deb, tiến hành rã bọc lấy file .dylib
         if [ ! -f "output/OmniFakeGPS.dylib" ]; then
-          dpkg-deb -x packages/*.deb output/
-          cp output/Library/MobileSubstrate/DynamicLibraries/OmniFakeGPS.dylib output/
+          dpkg-deb -x packages/*.deb output/ 2>/dev/null || true
+          cp output/Library/MobileSubstrate/DynamicLibraries/OmniFakeGPS.dylib output/ 2>/dev/null || true
         fi
 
     - name: Upload Finished Tweak (.dylib)
