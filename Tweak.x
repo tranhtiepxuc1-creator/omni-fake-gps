@@ -2,7 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-// --- 1. KHAI BÁO BIẾN TOÀN CỤC (PHẢI NẰM TRÊN CÙNG) ---
+// --- 1. KHAI BÁO BIẾN TOÀN CỤC ---
 static BOOL isFakeGPXActive = NO;
 static NSMutableArray *gpxPoints = nil; 
 static NSInteger currentPointIndex = 0;
@@ -14,7 +14,7 @@ static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
 
-// --- 2. HÀM ĐỌC PHÂN TÍCH FILE GPX THÔNG MINH ---
+// --- 2. HÀM ĐỌC PHÂN TÍCH FILE GPX THÔNG MINH (ĐÃ SỬA LỖI BIẾN) ---
 void parseGPXString(NSString *gpxString) {
     if (!gpxPoints) gpxPoints = [[NSMutableArray alloc] init];
     [gpxPoints removeAllObjects];
@@ -30,11 +30,13 @@ void parseGPXString(NSString *gpxString) {
     for (NSTextCheckingResult *match in matches) {
         NSString *line = [gpxString substringWithRange:match.range];
         
+        // Quét độc lập dữ liệu từng trục
         NSTextCheckingResult *latMatch = [latRegex firstMatchInString:line options:0 range:NSMakeRange(0, line.length)];
         NSTextCheckingResult *lonMatch = [lonRegex firstMatchInString:line options:0 range:NSMakeRange(0, line.length)];
         
         if (latMatch && lonMatch) {
             NSString *latStr = [line substringWithRange:[latMatch rangeAtIndex:1]];
+            // CHUẨN XÁC: Phải trích xuất từ mảng lonMatch mới lấy được dữ liệu kinh độ 108.x
             NSString *lonStr = [line substringWithRange:[lonMatch rangeAtIndex:1]];
             
             CLLocation *location = [[CLLocation alloc] initWithLatitude:[latStr doubleValue] longitude:[lonStr doubleValue]];
@@ -125,10 +127,15 @@ void updateSimulation() {
     
     if (!error && gpxContent) {
         parseGPXString(gpxContent);
-        statusLabel.text = [NSString stringWithFormat:@"📁 Tệp: %@", selectedFileURL.lastPathComponent];
-        statusLabel.textColor = [UIColor systemGreenColor];
+        if (gpxPoints.count > 0) {
+            statusLabel.text = [NSString stringWithFormat:@"📁 Tệp: %@ (%lu điểm)", selectedFileURL.lastPathComponent, (unsigned long)gpxPoints.count];
+            statusLabel.textColor = [UIColor systemGreenColor];
+        } else {
+            statusLabel.text = @"❌ Không tìm thấy tọa độ trkpt hợp lệ!";
+            statusLabel.textColor = [UIColor systemOrangeColor];
+        }
     } else {
-        statusLabel.text = @"❌ Không đọc được file này!";
+        statusLabel.text = @"❌ Không đọc được dữ liệu file!";
         statusLabel.textColor = [UIColor systemRedColor];
     }
 }
@@ -145,7 +152,7 @@ void updateSimulation() {
             sender.backgroundColor = [UIColor systemRedColor];
             updateSimulation();
         } else {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Bạn chưa chọn file .gpx hoặc file trống!" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Vui lòng nạp tệp .gpx hợp lệ trước!" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [[UIApplication sharedApplication].windows.firstObject.rootViewController presentViewController:alert animated:YES completion:nil];
         }
@@ -155,7 +162,7 @@ void updateSimulation() {
 
 static OmniControllerView *uiHandler = nil;
 
-// --- 5. KHỞI TẠO NÚT NỔI VÀ MENU CAO CẤP ---
+// --- 5. KHỞI TẠO GIAO DIỆN NÚT NỔI ---
 void initFloatingUI() {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = nil;
