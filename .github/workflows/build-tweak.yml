@@ -15,29 +15,31 @@ jobs:
 
     - name: Install Theos Environment
       run: |
-        # Cài đặt Theos vào thư mục cá nhân có toàn quyền đọc ghi
         export THEOS=/Users/runner/theos
         git clone --recursive https://github.com/theos/theos.git $THEOS
         echo "THEOS=$THEOS" >> $GITHUB_ENV
 
-    - name: Link Official iOS SDK from Xcode
+    - name: Clean and Link Official iOS SDK
       run: |
-        # Tạo đường dẫn liên kết thẳng tới bộ SDK iOS xịn có sẵn trong Xcode hệ thống
+        # Lấy đường dẫn bộ SDK iOS chính chủ từ Xcode hệ thống
         XCODE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
         echo "Tìm thấy Xcode SDK tại: $XCODE_SDK_PATH"
         
+        # Tạo thư mục và DỌN SẠCH các liên kết cũ để tránh lỗi "File exists"
         mkdir -p /Users/runner/theos/sdks
-        # Tạo một liên kết mềm (symlink) thay vì phải tải file nặng từ trên mạng
+        rm -rf /Users/runner/theos/sdks/*
+        
+        # Tạo liên kết mềm sạch sẽ 100% vào Theos
         ln -s "$XCODE_SDK_PATH" /Users/runner/theos/sdks/iPhoneOS.sdk
         
-        # Kiểm tra xem liên kết hoạt động tốt không
+        # Xác nhận danh sách SDK trong thư mục
         ls -la /Users/runner/theos/sdks/
 
     - name: Compile Tweak to .dylib
       run: |
         export THEOS=/Users/runner/theos
         
-        # Chỉ định rõ ràng sử dụng bộ SDK hệ thống vừa liên kết để biên dịch
+        # Tiến hành build tweak với môi trường SDK sạch
         make package FINALPACKAGE=1 SDKVERSION=iPhoneOS
       env:
         THEOS: /Users/runner/theos
@@ -45,10 +47,10 @@ jobs:
     - name: Prepare Dylib Artifact
       run: |
         mkdir -p output
-        # Gom file file .dylib sau khi đúc thành công ra ngoài
+        # Tìm và sao chép file .dylib sau khi build thành công ra thư mục output
         cp .theos/obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp obj/debug/OmniFakeGPS.dylib output/ 2>/dev/null || cp .theos/obj/OmniFakeGPS.dylib output/ 2>/dev/null
         
-        # Phòng trường hợp Theos đóng gói thẳng ra file .deb, ta giải nén để lấy file .dylib bên trong
+        # Nếu Theos đóng gói thành file .deb, tiến hành giải nén lấy file .dylib bên trong
         if [ ! -f "output/OmniFakeGPS.dylib" ]; then
           dpkg-deb -x packages/*.deb output/ 2>/dev/null || true
           cp output/Library/MobileSubstrate/DynamicLibraries/OmniFakeGPS.dylib output/ 2>/dev/null || true
