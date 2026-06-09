@@ -1,7 +1,7 @@
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
 
-// Bạn có thể sửa nhanh 2 dòng này trên GitHub để đổi vị trí tùy ý
+// Thiết lập tọa độ giả định vị mong muốn
 #define FAKE_LATITUDE 11.02345
 #define FAKE_LONGITUDE 108.23456
 
@@ -23,6 +23,9 @@
 }
 %end
 
-%ctl(constructor) {
-    NSLog(@"[OMNI-GPS] Tweak đã kích hoạt thành công tại vị trí thiết lập!");
+// ============================================================================
+// SỬA LỖI: Sử dụng cú pháp %ctor chuẩn và hiện đại nhất của Logos để khởi tạo ngầm
+// ============================================================================
+%ctor {
+    NSLog(@"[OMNI-GPS] Tweak Fake GPS 2026 đã kích hoạt thành công!");
 }
