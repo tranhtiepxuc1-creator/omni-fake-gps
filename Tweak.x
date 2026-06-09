@@ -1,31 +1,44 @@
 #import <CoreLocation/CoreLocation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <math.h>
 
 // --- 1. KHAI BÁO BIẾN TOÀN CỤC ---
 static BOOL isFakeGPXActive = NO;
-static NSMutableArray *gpxPoints = nil; 
-static NSInteger currentPointIndex = 0;
-static double simulationSpeed = 1.0;   
-static double movementSpeedKmh = 5.0;  
+static NSMutableArray *gpxPoints = nil; // Mảng lưu trữ danh sách tọa độ "tĩnh" lấy từ file
+static NSInteger currentPointIndex = 0; // Biến đếm vị trí điểm đang đứng trên tuyến đường
+static double simulationSpeed = 1.0;   // Hệ số tua thời gian (0.1x - 10x)
+static double movementSpeedKmh = 5.0;  // Tốc độ di chuyển mô phỏng (1km/h - 20km/h)
 
-static CLLocationCoordinate2D currentFakeCoordinate;
+static CLLocation *currentFakeLocation = nil; // Đối tượng vị trí "động" để bơm vào app FMS
 static UIButton *floatingButton = nil;
 static UIView *menuView = nil;
 static UILabel *statusLabel = nil; 
 
-static CLLocationCoordinate2D gpxStartReference;
-static CLLocationCoordinate2D realDeviceReference;
-static BOOL isReferenceSet = NO;
+// --- HÀM TỰ TÍNH TOÁN HƯỚNG XOAY MŨI TÊN (BEARING/COURSE) ---
+double calculateCourse(double lat1, double lon1, double lat2, double lon2) {
+    double lat1Rad = lat1 * M_PI / 180.0;
+    double lat2Rad = lat2 * M_PI / 180.0;
+    double dLonRad = (lon2 - lon1) * M_PI / 180.0;
+    
+    double y = sin(dLonRad) * cos(lat2Rad);
+    double x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLonRad);
+    double bearingRad = atan2(y, x);
+    double bearingDeg = bearingRad * 180.0 / M_PI;
+    
+    if (bearingDeg < 0) {
+        bearingDeg += 360.0;
+    }
+    return bearingDeg;
+}
 
-// --- 2. BỘ GIẢI MÃ ĐA NĂNG (HỖ TRỢ CẢ GPX LẪN GEOJSON BÌNH THUẬN) ---
+// --- 2. BỘ GIẢI MÃ ĐỌC DỮ LIỆU TĨNH TỪ TỆP TIN ---
 void parseSpatialFile(NSString *fileContent) {
     if (!gpxPoints) gpxPoints = [[NSMutableArray alloc] init];
     [gpxPoints removeAllObjects];
     currentPointIndex = 0;
-    isReferenceSet = NO;
     
-    // Kiểm tra xem có phải định dạng GeoJSON không
+    // Đọc file cấu trúc GeoJSON (.geojson)
     if ([fileContent containsString:@"\"type\""] && [fileContent containsString:@"\"coordinates\""]) {
         NSData *jsonData = [fileContent dataUsingEncoding:NSUTF8StringEncoding];
         NSError *jsonError = nil;
@@ -37,69 +50,103 @@ void parseSpatialFile(NSString *fileContent) {
                 NSArray *coordinates = geometry[@"coordinates"];
                 for (NSArray *point in coordinates) {
                     if (point.count >= 2) {
-                        // GeoJSON lưu theo thứ tự [Kinh độ, Vĩ độ]
                         double lon = [point[0] doubleValue];
                         double lat = [point[1] doubleValue];
-                        CLLocation *location = [[CLLocation alloc] initWithLatitude:lat longitude:lon];
-                        [gpxPoints addObject:location];
+                        // Nếu file không lưu độ cao, mặc định bù độ cao nền Bình Thuận là 50 mét
+                        double ele = (point.count >= 3 && [point[2] doubleValue] > 0) ? [point[2] doubleValue] : 50.0;
+                        
+                        CLLocation *loc = [[CLLocation alloc] initWithCoordinate:CLLocationCoordinate2DMake(lat, lon)
+                                                                        altitude:ele
+                                                              horizontalAccuracy:1.0
+                                                                verticalAccuracy:1.0
+                                                                       timestamp:[NSDate date]];
+                        [gpxPoints addObject:loc];
                     }
                 }
             }
         }
     }
     
-    // Nếu không phải GeoJSON hoặc bóc tách GeoJSON lỗi, tự động chuyển sang quét hệ GPX
+    // Đọc file cấu trúc GPX truyền thống (.gpx)
     if (gpxPoints.count == 0) {
         NSError *error = nil;
+        NSRegularExpression *trkptRegex = [NSRegularExpression regularExpressionWithPattern:@"<trkpt[^>]*>([\\s\\S]*?)</trkpt>" options:0 error:&error];
+        NSArray *trkptMatches = [trkptRegex matchesInString:fileContent options:0 range:NSMakeRange(0, fileContent.length)];
+        
         NSRegularExpression *latRegex = [NSRegularExpression regularExpressionWithPattern:@"lat=\"([^\"]+)\"" options:0 error:&error];
-        NSArray *latMatches = [latRegex matchesInString:fileContent options:0 range:NSMakeRange(0, fileContent.length)];
-        
         NSRegularExpression *lonRegex = [NSRegularExpression regularExpressionWithPattern:@"lon=\"([^\"]+)\"" options:0 error:&error];
-        NSArray *lonMatches = [lonRegex matchesInString:fileContent options:0 range:NSMakeRange(0, fileContent.length)];
+        NSRegularExpression *eleRegex = [NSRegularExpression regularExpressionWithPattern:@"<ele>([^<]+)</ele>" options:0 error:&error];
         
-        NSInteger count = MIN(latMatches.count, lonMatches.count);
-        for (NSInteger i = 0; i < count; i++) {
-            double rawLat = [[fileContent substringWithRange:[latMatches[i] rangeAtIndex:1]] doubleValue];
-            double rawLon = [[fileContent substringWithRange:[lonMatches[i] rangeAtIndex:1]] doubleValue];
-            CLLocation *location = [[CLLocation alloc] initWithLatitude:rawLat longitude:rawLon];
-            [gpxPoints addObject:location];
+        for (NSTextCheckingResult *match in trkptMatches) {
+            NSString *trkptBlock = [fileContent substringWithRange:match.range];
+            
+            NSTextCheckingResult *latM = [latRegex firstMatchInString:trkptBlock options:0 range:NSMakeRange(0, trkptBlock.length)];
+            NSTextCheckingResult *lonM = [lonRegex firstMatchInString:trkptBlock options:0 range:NSMakeRange(0, trkptBlock.length)];
+            NSTextCheckingResult *eleM = [eleRegex firstMatchInString:trkptBlock options:0 range:NSMakeRange(0, trkptBlock.length)];
+            
+            if (latM && lonM) {
+                double lat = [[trkptBlock substringWithRange:[latM rangeAtIndex:1]] doubleValue];
+                double lon = [[trkptBlock substringWithRange:[lonM rangeAtIndex:1]] doubleValue];
+                double ele = eleM ? [[trkptBlock substringWithRange:[eleM rangeAtIndex:1]] doubleValue] : 50.0;
+                
+                CLLocation *loc = [[CLLocation alloc] initWithCoordinate:CLLocationCoordinate2DMake(lat, lon)
+                                                                altitude:ele
+                                                      horizontalAccuracy:1.0
+                                                        verticalAccuracy:1.0
+                                                               timestamp:[NSDate date]];
+                [gpxPoints addObject:loc];
+            }
         }
     }
 }
 
-// --- 3. HÀM CẬP NHẬT MÔ PHỎNG ĐỘ LỆCH TUYẾN TÍNH ADAPTIVE ---
+// --- 3. HÀM ĐIỀU KHIỂN THỜI GIAN ĐỂ TẠO SỰ DI CHUYỂN ĐỘNG ---
 void updateSimulation() {
     if (!isFakeGPXActive || !gpxPoints || gpxPoints.count == 0) return;
     
-    CLLocation *targetGPXPoint = gpxPoints[currentPointIndex];
+    // Bốc điểm tọa độ tĩnh hiện tại trong mảng ra xử lý
+    CLLocation *currentPoint = gpxPoints[currentPointIndex];
     
-    if (!isReferenceSet) {
-        gpxStartReference = [gpxPoints.firstObject coordinate];
-        // Điểm mốc lấy từ tâm hành trình thực tế Hòa Thắng - Bình Thuận của tệp
-        realDeviceReference = CLLocationCoordinate2DMake(11.077425, 108.409077); 
-        isReferenceSet = YES;
+    // Lập trình tự động tính toán hướng xoay đầu mũi tên dựa trên điểm sắp tới
+    double calculatedCourse = 0.0;
+    if (currentPointIndex < gpxPoints.count - 1) {
+        CLLocation *nextPoint = gpxPoints[currentPointIndex + 1];
+        calculatedCourse = calculateCourse(currentPoint.coordinate.latitude, currentPoint.coordinate.longitude,
+                                           nextPoint.coordinate.latitude, nextPoint.coordinate.longitude);
+    } else if (gpxPoints.count > 1) {
+        CLLocation *prevPoint = gpxPoints[currentPointIndex - 1];
+        calculatedCourse = calculateCourse(prevPoint.coordinate.latitude, prevPoint.coordinate.longitude,
+                                           currentPoint.coordinate.latitude, currentPoint.coordinate.longitude);
     }
     
-    double deltaLat = targetGPXPoint.coordinate.latitude - gpxStartReference.latitude;
-    double deltaLon = targetGPXPoint.coordinate.longitude - gpxStartReference.longitude;
+    double speedMs = movementSpeedKmh / 3.6; // Đổi vận tốc km/h sang m/s chuẩn Apple
     
-    currentFakeCoordinate.latitude = realDeviceReference.latitude + deltaLat;
-    currentFakeCoordinate.longitude = realDeviceReference.longitude + deltaLon;
+    // Đúc gói vị trí động hoàn chỉnh để chuyển cho hàm Hook che mắt app FMS
+    currentFakeLocation = [[CLLocation alloc] initWithCoordinate:currentPoint.coordinate
+                                                        altitude:currentPoint.altitude
+                                              horizontalAccuracy:1.0  
+                                                verticalAccuracy:1.0  
+                                                          course:calculatedCourse 
+                                                           speed:speedMs  
+                                                       timestamp:[NSDate date]];
     
+    // Tăng chỉ số để vòng lặp sau tự động bước sang điểm tiếp theo
     currentPointIndex++;
     if (currentPointIndex >= gpxPoints.count) {
-        currentPointIndex = 0; 
+        currentPointIndex = 0; // Chạy hết tuyến đường thì tự động quay lại điểm xuất phát
     }
     
+    // Công thức tính toán nhịp thời gian delay dựa trên tốc độ chọn trên thanh gạt
     double interval = (3.6 / movementSpeedKmh) / simulationSpeed;
     if (interval < 0.1) interval = 0.1;
     
+    // PHÁT LỆNH DI CHUYỂN: Ép hàm điều khiển tự lặp lại sau một khoảng nhịp thời gian
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         updateSimulation();
     });
 }
 
-// --- 4. GIAO DIỆN VÀ XỬ LÝ SỰ KIỆN CHỌN FILE ---
+// --- 4. GIAO DIỆN ĐIỀU KHIỂN MENU NÚT NỔI ---
 @interface OmniControllerView : UIView <UIDocumentPickerDelegate>
 - (void)handlePan:(UIPanGestureRecognizer *)sender;
 - (void)toggleMenu;
@@ -136,7 +183,6 @@ void updateSimulation() {
 }
 
 - (void)openFilePicker {
-    // Cho phép mở rộng phạm vi chọn mọi định dạng file văn bản hệ thống (gpx, geojson, json, txt)
     UIDocumentPickerViewController *documentPicker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData, UTTypeText] asCopy:YES];
     documentPicker.delegate = self;
     documentPicker.modalPresentationStyle = UIModalPresentationFormSheet;
@@ -182,7 +228,7 @@ void updateSimulation() {
             isFakeGPXActive = YES;
             [sender setTitle:@"ĐANG CHẠY MÔ PHỎNG - BẤM ĐỂ DỪNG" forState:UIControlStateNormal];
             sender.backgroundColor = [UIColor systemRedColor];
-            updateSimulation();
+            updateSimulation(); // Bắt đầu ra lệnh kích hoạt luồng điều khiển thời gian di chuyển
         } else {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Lưu ý" message:@"Vui lòng nạp tệp lộ trình trước!" preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -230,7 +276,7 @@ void initFloatingUI() {
         menuView.hidden = YES;
         
         UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, 270, 20)];
-        titleLabel.text = @"OMNI GPS - MULTI FORMAT SYSTEM";
+        titleLabel.text = @"OMNI GPS - PROFESSIONAL SYSTEM";
         titleLabel.textColor = [UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0];
         titleLabel.font = [UIFont boldSystemFontOfSize:13];
         titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -305,11 +351,41 @@ void initFloatingUI() {
     });
 }
 
-// --- 5. HOOK ĐỊNH VỊ CORE-LOCATION ---
+// --- 5. HOOK BẺ GÃY HỆ THỐNG ĐỊNH VỊ CORE-LOCATION ---
 %hook CLLocation
 - (CLLocationCoordinate2D)coordinate {
-    if (isFakeGPXActive && gpxPoints.count > 0) {
-        return currentFakeCoordinate;
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.coordinate;
+    }
+    return %orig;
+}
+- (CLLocationDistance)altitude {
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.altitude;
+    }
+    return %orig;
+}
+- (CLLocationDirection)course {
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.course;
+    }
+    return %orig;
+}
+- (CLLocationSpeed)speed {
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.speed;
+    }
+    return %orig;
+}
+- (CLLocationAccuracy)horizontalAccuracy {
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.horizontalAccuracy;
+    }
+    return %orig;
+}
+- (CLLocationAccuracy)verticalAccuracy {
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation.verticalAccuracy;
     }
     return %orig;
 }
@@ -317,8 +393,8 @@ void initFloatingUI() {
 
 %hook CLLocationManager
 - (CLLocation *)location {
-    if (isFakeGPXActive && gpxPoints.count > 0) {
-        return [[CLLocation alloc] initWithLatitude:currentFakeCoordinate.latitude longitude:currentFakeCoordinate.longitude];
+    if (isFakeGPXActive && currentFakeLocation) {
+        return currentFakeLocation;
     }
     return %orig;
 }
